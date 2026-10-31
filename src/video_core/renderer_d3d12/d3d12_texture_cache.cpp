@@ -925,14 +925,48 @@ ID3D12Resource* Image::SliceArray() {
     return slice_array.Get();
 }
 
+namespace {
+/// Color format of a one-slice 3D copy of a depth resource's depth plane, or UNKNOWN when its
+/// copied bits are not directly readable as one. D24 is copied out as float bits only on
+/// drivers that keep it as 32-bit float (the Series, see ProbeDepth24Readback).
+DXGI_FORMAT DepthVolumeFormat(DXGI_FORMAT resource_format, bool depth24_float) {
+    switch (resource_format) {
+    case DXGI_FORMAT_R32_TYPELESS:
+    case DXGI_FORMAT_D32_FLOAT:
+    case DXGI_FORMAT_R32G8X24_TYPELESS:
+    case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        return DXGI_FORMAT_R32_FLOAT;
+    case DXGI_FORMAT_R16_TYPELESS:
+    case DXGI_FORMAT_D16_UNORM:
+        return DXGI_FORMAT_R16_UNORM;
+    case DXGI_FORMAT_R24G8_TYPELESS:
+    case DXGI_FORMAT_D24_UNORM_S8_UINT:
+        return depth24_float ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_UNKNOWN;
+    default:
+        return DXGI_FORMAT_UNKNOWN;
+    }
+}
+} // Anonymous namespace
+
 ID3D12Resource* Image::Volume() {
     if (volume || !resource || info.type != ImageType::e2D) {
         return volume.Get();
     }
     D3D12_RESOURCE_DESC desc = resource->GetDesc();
     if (desc.DepthOrArraySize != 1 || desc.SampleDesc.Count > 1 ||
-        (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) {
+        desc.Width > D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION ||
+        desc.Height > D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION) {
         return nullptr;
+    }
+    if (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) {
+        // A depth buffer sampled as 3D (Sonic Frontiers): 3D resources cannot be depth, so the
+        // depth plane goes to a color volume of the same texel size. Its copied bits are the
+        // depth values themselves (float, or 16-bit UNORM).
+        const DXGI_FORMAT color = DepthVolumeFormat(desc.Format, runtime->depth24_readback_float);
+        if (color == DXGI_FORMAT_UNKNOWN) {
+            return nullptr;
+        }
+        desc.Format = color;
     }
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;

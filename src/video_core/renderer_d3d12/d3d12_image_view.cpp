@@ -477,8 +477,14 @@ D3D12_CPU_DESCRIPTOR_HANDLE ImageView::CreateSrv(Shader::TextureType texture_typ
         // The shader samples a 2D image as 3D (a 1x1 placeholder bound to a volume slot); D3D12
         // has no such view, so read a one-slice 3D copy of it.
         Image* const source = SourceImage();
-        if (ID3D12Resource* const volume = source ? source->Volume() : nullptr) {
-            D3D12_SHADER_RESOURCE_VIEW_DESC desc{.Format = p.format,
+        // A stencil view of a depth buffer has no volume: the copy holds its depth plane only.
+        const bool stencil_view = p.format == DXGI_FORMAT_X24_TYPELESS_G8_UINT ||
+                                  p.format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT;
+        ID3D12Resource* const volume = source && !stencil_view ? source->Volume() : nullptr;
+        if (volume) {
+            // A depth buffer's volume is a color copy of its depth plane, read in its own format.
+            const bool depth = (image->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0;
+            D3D12_SHADER_RESOURCE_VIEW_DESC desc{.Format = depth ? volume->GetDesc().Format : p.format,
                                                  .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D,
                                                  .Shader4ComponentMapping = p.mapping};
             desc.Texture3D = {p.base_level, p.levels, 0.0f};
