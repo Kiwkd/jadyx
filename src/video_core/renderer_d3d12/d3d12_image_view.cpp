@@ -449,7 +449,8 @@ D3D12_CPU_DESCRIPTOR_HANDLE ImageView::CreateSrv(Shader::TextureType texture_typ
                              srv_resource ? srv_resource : image;
     const auto resource_desc = resource ? resource->GetDesc() : D3D12_RESOURCE_DESC{};
     const bool is_3d = p.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-    if (texture_type == TextureType::ColorArray2D && is_3d && image) {
+    if ((texture_type == TextureType::ColorArray2D || texture_type == TextureType::Color2D) &&
+        is_3d && image) {
         // Game C samples a 3D texture as a 2D array (Vulkan's 2D_ARRAY_COMPATIBLE); D3D12
         // has no such view, and the 3D SRV this fell back to made the Series write NaN (the black
         // silhouettes; the PC's driver happened to read it right). View a 2D array copy instead.
@@ -460,6 +461,12 @@ D3D12_CPU_DESCRIPTOR_HANDLE ImageView::CreateSrv(Shader::TextureType texture_typ
                                                  .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
                                                  .Shader4ComponentMapping = p.mapping};
             desc.Texture2DArray = {p.base_level, p.levels, 0, depth, 0, 0.0f};
+            if (texture_type == TextureType::Color2D) {
+                // A 3D image sampled as plain 2D (Sonic Frontiers, a 64x64 volume): read its
+                // first slice instead of a null view that returns zeros.
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                desc.Texture2D = {p.base_level, p.levels, 0, 0.0f};
+            }
             const D3D12_CPU_DESCRIPTOR_HANDLE handle = runtime->view_descriptors.Allocate();
             runtime->device.Get()->CreateShaderResourceView(slices, &desc, handle);
             CheckRemovedAfterDescriptor(runtime->device.Get(), [&] {
@@ -523,7 +530,8 @@ D3D12_CPU_DESCRIPTOR_HANDLE ImageView::CreateSrv(Shader::TextureType texture_typ
         }
     }
     if (resource && !IsSrvDimensionCompatible(texture_type, resource_desc, p.base_layer, p.layers)) {
-        const bool slices_pending = texture_type == TextureType::ColorArray2D && is_3d && image &&
+        const bool slices_pending = (texture_type == TextureType::ColorArray2D ||
+                                     texture_type == TextureType::Color2D) && is_3d && image &&
                                     !slot_images; // replaced once the view knows its image
         if (!slices_pending) {
             WarnOnce(logged_srv_fallback,
@@ -672,7 +680,8 @@ void ImageView::PrepareRead(Shader::TextureType texture_type) const {
             source->ReadReinterpreted();
         }
     }
-    if (texture_type == Shader::TextureType::ColorArray2D &&
+    if ((texture_type == Shader::TextureType::ColorArray2D ||
+         texture_type == Shader::TextureType::Color2D) &&
         srv_params.dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D) {
         if (Image* const source = SourceImage()) {
             source->RefreshSliceArray();
